@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ultron - local environment
+models/
+test.json
+
+# Ultron - local configuration / secrets
+.env
+.env.*
+
+# Ultron - local model/cache data
+*.gguf
+
+# Ultron - local runtime data
+data/
+logs/
