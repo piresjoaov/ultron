@@ -1,126 +1,100 @@
 import json
-import urllib.request
-import subprocess
 import time
-import threading
-import itertools
-from tools import get_time
-from tools.registry import TOOLS
+from server import LlamaServer
+from client import stream_chat_completion
+from ui import Spinner
+from tools.registry import TOOLS, TOOL_DEFINITIONS
 
-url = 'http://127.0.0.1:8080/v1/chat/completions'
+def main():
+    server = LlamaServer()
+    server.start()
 
-server_path = r"C:\Users\joaov\llama.cpp\build\bin\Release\llama-server.exe"
+    messages = [
+        {
+            'role': 'system',
+            'content': (
+                'You are Ultron, an AI assistant running locally with access to custom system tools. '
+                'You HAVE access to the local machine and web via the provided tools. '
+                'When the user asks to read, search, find files, list directories, or search the web, '
+                'you MUST ALWAYS call the appropriate tool instead of claiming you cannot access the system. '
+                'Do not use emojis under any circumstances. '
+                'Do not use Markdown bolding or asterisks (no **text** or *text*). '
+                'Output clean, direct, plain text only.'
+            )
+        }
+    ]
+    spinner = Spinner("Assistant: ")
 
-server = subprocess.Popen([
-    server_path,
-    "-hf", "Qwen/Qwen3-8B-GGUF:Q4_K_M",
-    "--device", "Vulkan1",
-    "--flash-attn", "on",
-    "--fit", "on",
-    "--log-file", "logs/llama-server.log"
-], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-messages = [
-    {'role': 'system', 'content': 'You are a helpful assistant.'}
-]
-
-bot_reply = ""
-
-def server_is_ready():
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=1) as response:
-            return response.status == 200
-    except:
-        return False
-
-def spinner(stop_event):
-    for char in itertools.cycle("|/-\\"):
-        if stop_event.is_set():
-            break
-
-        print(f"\rAssistant: {char}", end="", flush=True)
-        time.sleep(0.1)
-
-    print("\rAssistant: ", end="", flush=True)
-
-while not server_is_ready():
-    print("Waiting for llama-server...")
-    time.sleep(1)
-
-print("llama-server is ready!\n")
-
-try:
-    while True:
-        message = input("User: ")
-
-        if message.lower() == "exit":
+        while True:
+            user_input = input("User: ")
+            if user_input.lower() == "exit":
                 break
 
-        messages.append({
-            'role': 'user',
-            'content': message
-        })
+            start_time = time.time()
+            messages.append({'role': 'user', 'content': user_input})
 
-        payload = {
-            'model': 'qwen',
-            'messages': messages,
-            'temperature': 0.7,
-            'stream': True
-        }
+            spinner.start()
 
-        data = json.dumps(payload).encode('utf-8')
+            def on_first_token(token):
+                spinner.stop()
+                print(token, end="", flush=True)
 
-        headers = {
-            'Content-Type': 'application/json'
-        }
+            bot_reply, tool_call = stream_chat_completion(
+                messages, 
+                tools=TOOL_DEFINITIONS, 
+                on_token=on_first_token
+            )
+            spinner.stop()
 
-        req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+            if tool_call["name"] and tool_call["name"] in TOOLS:
+                call_id = tool_call["id"] or "call_1"
+                
+                messages.append({
+                    "role": "assistant",
+                    "content": bot_reply if bot_reply else None,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call["name"],
+                            "arguments": tool_call["arguments"]
+                        }
+                    }]
+                })
 
-        print("Assistant: ", end="", flush=True)
+                raw_args = tool_call.get("arguments", "{}")
+                try:
+                    kwargs = json.loads(raw_args) if raw_args else {}
+                    result = TOOLS[tool_call["name"]](**kwargs)
+                except Exception as e:
+                    result = f"Error executing {tool_call['name']}: {str(e)}"
 
-        stop_spinner = threading.Event()
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": str(result)
+                })
 
-        spinner_thread = threading.Thread(
-            target=spinner,
-            args=(stop_spinner,)
-        )
+                spinner.start()
+                final_reply, _ = stream_chat_completion(
+                    messages, 
+                    tools=None, 
+                    on_token=on_first_token
+                )
+                spinner.stop()
 
-        spinner_thread.start()
+                if final_reply:
+                    messages.append({'role': 'assistant', 'content': final_reply})
 
-        with urllib.request.urlopen(req) as response:
-            while True:
-                line = response.readline()
+            elif bot_reply:
+                messages.append({'role': 'assistant', 'content': bot_reply})
 
-                if not line:
-                    break
+            elapsed = time.time() - start_time
+            print(f"\nResponse time: {elapsed:.2f} seconds\n")
 
-                line = line.decode('utf-8').strip()
+    finally:
+        server.stop()
 
-                if not line:
-                    continue
-
-                if line.startswith("data: "):
-                    line = line[6:]
-
-                if line == "[DONE]":
-                    break
-
-                chunk = json.loads(line)
-
-                content = chunk["choices"][0]["delta"].get("content")
-
-                if content:
-                    stop_spinner.set()
-                    spinner_thread.join()
-                    bot_reply += content
-                    print(content, end="", flush=True)
-
-        messages.append({
-            'role': 'assistant',
-            'content': bot_reply
-        })
-
-        print("\n")
-
-finally:
-    server.terminate()
+if __name__ == "__main__":
+    main()
