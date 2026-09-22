@@ -15,7 +15,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_time",
-            "description": "Returns the current local time.",
+            "description": "Returns the current local time for the user. CRITICAL: ONLY use this for the user's local time. If the user asks for the time in a different city or country (e.g., Tokyo, London), DO NOT use this tool. You MUST use 'web_search' instead to find foreign times.",
             "parameters": {
                 "type": "object",
                 "properties": {},

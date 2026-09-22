@@ -1,9 +1,8 @@
-import json
 import time
 from server import LlamaServer
-from client import stream_chat_completion
 from ui import Spinner
-from tools.registry import TOOLS, TOOL_DEFINITIONS
+from config import DEVELOPMENT_MODE
+from orchestration.orchestrator import Orchestrator
 
 def main():
     server = LlamaServer()
@@ -23,72 +22,33 @@ def main():
             )
         }
     ]
+    orchestrator = Orchestrator(messages=messages)
     spinner = Spinner("Assistant: ")
 
     try:
         while True:
             user_input = input("User: ")
+
             if user_input.lower() == "exit":
                 break
 
             start_time = time.time()
-            messages.append({'role': 'user', 'content': user_input})
-
             spinner.start()
 
             def on_first_token(token):
                 spinner.stop()
                 print(token, end="", flush=True)
 
-            bot_reply, tool_call = stream_chat_completion(
-                messages, 
-                tools=TOOL_DEFINITIONS, 
-                on_token=on_first_token
-            )
+            response = orchestrator.handle_message(user_input, on_token=on_first_token)
             spinner.stop()
-
-            if tool_call["name"] and tool_call["name"] in TOOLS:
-                call_id = tool_call["id"] or "call_1"
-                
-                messages.append({
-                    "role": "assistant",
-                    "content": bot_reply if bot_reply else None,
-                    "tool_calls": [{
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_call["name"],
-                            "arguments": tool_call["arguments"]
-                        }
-                    }]
-                })
-
-                raw_args = tool_call.get("arguments", "{}")
-                try:
-                    kwargs = json.loads(raw_args) if raw_args else {}
-                    result = TOOLS[tool_call["name"]](**kwargs)
-                except Exception as e:
-                    result = f"Error executing {tool_call['name']}: {str(e)}"
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": str(result)
-                })
-
-                spinner.start()
-                final_reply, _ = stream_chat_completion(
-                    messages, 
-                    tools=None, 
-                    on_token=on_first_token
-                )
-                spinner.stop()
-
-                if final_reply:
-                    messages.append({'role': 'assistant', 'content': final_reply})
-
-            elif bot_reply:
-                messages.append({'role': 'assistant', 'content': bot_reply})
+            if DEVELOPMENT_MODE:
+                print("\n[Routing] "
+                    f"category={response.task_category}; selected={response.model_id}; "
+                    f"model_ref={response.metadata['model_ref']}; "
+                    f"endpoint={response.metadata['endpoint'] or 'default'}; "
+                    f"fallback={response.metadata['fallback_used']}; "
+                    f"sanitized={response.metadata['output_sanitized']}; "
+                    f"reason={response.routing_reason}")
 
             elapsed = time.time() - start_time
             print(f"\nResponse time: {elapsed:.2f} seconds\n")
