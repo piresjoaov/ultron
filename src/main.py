@@ -1,12 +1,14 @@
+import asyncio
 import time
 from server import LlamaServer
 from ui import Spinner
 from config import DEVELOPMENT_MODE
+from client import ChatClientError
 from orchestration.orchestrator import Orchestrator
 
-def main():
+async def main():
     server = LlamaServer()
-    server.start()
+    await asyncio.to_thread(server.start)
 
     messages = [
         {
@@ -27,7 +29,7 @@ def main():
 
     try:
         while True:
-            user_input = input("User: ")
+            user_input = await asyncio.to_thread(input, "User: ")
 
             if user_input.lower() == "exit":
                 break
@@ -37,9 +39,13 @@ def main():
 
             def on_first_token(token):
                 spinner.stop()
-                print(token, end="", flush=True)
 
-            response = orchestrator.handle_message(user_input, on_token=on_first_token)
+            try:
+                response = await orchestrator.handle_message(user_input, on_token=on_first_token)
+            except ChatClientError as exc:
+                spinner.stop()
+                print(f"\nError communicating with the model: {exc}\n")
+                continue
             spinner.stop()
             if DEVELOPMENT_MODE:
                 print("\n[Routing] "
@@ -54,7 +60,7 @@ def main():
             print(f"\nResponse time: {elapsed:.2f} seconds\n")
 
     finally:
-        server.stop()
+        await asyncio.to_thread(server.stop)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

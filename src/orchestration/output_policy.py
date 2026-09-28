@@ -20,7 +20,7 @@ class OutputReview:
 class PlainTextOutputPolicy:
     """Canonicalize model output to safe, plain terminal text."""
     _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
-    _FENCE = re.compile(r"^\s*```[^\n]*$", re.MULTILINE)
+    _FENCE = re.compile(r"^[ \t]*```[^\r\n]*(?:\r?\n|$)", re.MULTILINE)
     _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\)")
     _HTML_TAG = re.compile(r"</?[^>]+>")
     _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)

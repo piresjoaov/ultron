@@ -1,7 +1,10 @@
+import asyncio
+import inspect
 import json
+import sys
 import time
 
-from client import stream_chat_completion
+from client import ChatClientError, stream_chat_completion
 from config import MAX_TOOL_ROUNDS
 from models.catalog import ModelCatalog
 from models.types import AssistantResponse
@@ -20,7 +23,7 @@ class Orchestrator:
         self.max_tool_rounds = max_tool_rounds
         self.output_policy = output_policy or PlainTextOutputPolicy()
 
-    def handle_message(self, user_input, on_token=None):
+    async def handle_message(self, user_input, on_token=None):
         task = self.classifier.classify(user_input, self.messages)
         decision = self.router.route(task)
         model = self.catalog.get(decision.model_id)
@@ -28,12 +31,21 @@ class Orchestrator:
         calls_made, final_text = [], ""
         started = time.monotonic()
         for round_number in range(self.max_tool_rounds):
-            # Qwen's private thinking stream can spend the entire output budget before
-            # it emits an answer. Keep the terminal assistant deterministic today;
-            # a future model profile may opt into bounded thinking explicitly.
-            text, tool_calls = self.chat_client(
-                self.messages, tools=TOOL_DEFINITIONS, on_token=None,
-                endpoint=model.endpoint, model=model.model_ref, enable_thinking=False)
+            try:
+                text, tool_calls = await self._consume_stream(model, on_token)
+            except ChatClientError:
+                if not model.requires_token:
+                    raise
+                local_models = [candidate for candidate in self.catalog.available_models()
+                                if not candidate.requires_token]
+                if not local_models:
+                    raise
+                model = local_models[0]
+                decision = decision.__class__(
+                    model.id, task.category,
+                    "Cloud request failed; using local model fallback",
+                    decision.confidence * 0.7, True)
+                text, tool_calls = await self._consume_stream(model, on_token)
             final_text = text or final_text
             if not tool_calls:
                 if final_text:
@@ -42,7 +54,7 @@ class Orchestrator:
             self.messages.append({"role": "assistant", "content": text or None, "tool_calls": [self._tool_call_message(call, index) for index, call in enumerate(tool_calls)]})
             for index, call in enumerate(tool_calls):
                 call_id = call.get("id") or f"call_{len(calls_made) + index + 1}"
-                result = self._execute_tool(call)
+                result = await asyncio.to_thread(self._execute_tool, call)
                 calls_made.append({**call, "id": call_id, "result": result})
                 self.messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
             if round_number == self.max_tool_rounds - 1:
@@ -50,9 +62,84 @@ class Orchestrator:
                 final_text = f"{final_text}\n\n{suffix}" if final_text else suffix
                 break
         review = self.output_policy.review(final_text)
-        if on_token and review.text:
-            on_token(review.text)
         return AssistantResponse(review.text, decision.model_id, task.category, decision.reason, tool_calls=calls_made, metadata={"model_ref": model.model_ref, "endpoint": model.endpoint, "routing_confidence": decision.confidence, "fallback_used": decision.fallback_used, "output_sanitized": review.changed, "output_policy_violations": list(review.violations), "latency_ms": int((time.monotonic() - started) * 1000)})
+
+    async def _consume_stream(self, model, on_token):
+        text_parts, calls, buffer = [], {}, ""
+        in_tool_call = False
+        stream = self.chat_client(
+            self.messages, tools=TOOL_DEFINITIONS, endpoint=model.endpoint,
+            model=model.model_ref, api_url=model.api_url,
+            requires_token=model.requires_token, enable_thinking=False)
+        if inspect.isawaitable(stream):
+            stream = await stream
+        async for event in stream:
+            kind = event.get("kind") if isinstance(event, dict) else event.kind
+            if kind == "tool_call":
+                call = event.get("tool_call") if isinstance(event, dict) else event.tool_call
+                self._merge_tool_call(calls, call)
+                continue
+            content = event.get("content", "") if isinstance(event, dict) else event.content
+            if not content:
+                continue
+            buffer, in_tool_call = self._consume_content(
+                buffer + content, in_tool_call, calls, text_parts, on_token)
+        if buffer and not in_tool_call:
+            self._emit_visible(buffer, text_parts, on_token)
+        return "".join(text_parts), list(calls.values())
+
+    def _consume_content(self, buffer, in_tool_call, calls, text_parts, on_token):
+        opening, closing = "<tool_call>", "</tool_call>"
+        while buffer:
+            if in_tool_call:
+                end = buffer.find(closing)
+                if end < 0:
+                    return buffer, True
+                self._parse_markup_call(buffer[:end], calls)
+                buffer, in_tool_call = buffer[end + len(closing):], False
+                continue
+            start = buffer.find(opening)
+            if start >= 0:
+                self._emit_visible(buffer[:start], text_parts, on_token)
+                buffer, in_tool_call = buffer[start + len(opening):], True
+                continue
+            prefix_length = max((size for size in range(1, min(len(buffer), len(opening) - 1) + 1)
+                                 if opening.startswith(buffer[-size:])), default=0)
+            visible = buffer[:-prefix_length] if prefix_length else buffer
+            self._emit_visible(visible, text_parts, on_token)
+            return buffer[-prefix_length:] if prefix_length else "", False
+        return "", in_tool_call
+
+    @staticmethod
+    def _emit_visible(content, text_parts, on_token):
+        if not content:
+            return
+        text_parts.append(content)
+        if on_token:
+            on_token(content)
+        sys.stdout.write(content)
+        sys.stdout.flush()
+
+    @staticmethod
+    def _merge_tool_call(calls, call):
+        if not call:
+            return
+        index = call.get("index", 0)
+        entry = calls.setdefault(index, {"id": "", "name": None, "arguments": ""})
+        entry["id"] = call.get("id") or entry["id"]
+        entry["name"] = call.get("name") or entry["name"]
+        entry["arguments"] += call.get("arguments", "")
+
+    @staticmethod
+    def _parse_markup_call(raw, calls):
+        try:
+            call = json.loads(raw.strip())
+        except (json.JSONDecodeError, TypeError):
+            return
+        if isinstance(call, dict):
+            arguments = call.get("arguments", {})
+            calls[len(calls)] = {"id": call.get("id", ""), "name": call.get("name"),
+                                 "arguments": json.dumps(arguments) if isinstance(arguments, dict) else arguments}
 
     @staticmethod
     def _tool_call_message(call, index):

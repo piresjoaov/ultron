@@ -1,8 +1,12 @@
 import importlib
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
+import config
+from client import StreamEvent
 from models.catalog import ModelCatalog
 from models.types import ModelProfile
 from orchestration.model_router import ModelRouter
@@ -10,7 +14,7 @@ from orchestration.orchestrator import Orchestrator
 from orchestration.output_policy import PlainTextOutputPolicy
 from orchestration.task_classifier import TaskClassifier
 
-class OrchestrationTests(unittest.TestCase):
+class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self): self.classifier = TaskClassifier()
     def test_general_classification(self): self.assertEqual(self.classifier.classify("Olá, como você está?").category, "general")
     def test_coding_classification(self): self.assertEqual(self.classifier.classify("Explique este erro Python").category, "coding")
@@ -19,8 +23,19 @@ class OrchestrationTests(unittest.TestCase):
     def test_long_prompt(self): self.assertTrue(self.classifier.classify("x" * 25000).requires_long_context)
     def test_tools_required(self): self.assertTrue(self.classifier.classify("encontre arquivos Python").requires_tools)
     def test_model_selection(self):
-        decision = ModelRouter(ModelCatalog()).route(self.classifier.classify("Python bug"))
+        with patch.object(config, "GITHUB_MODELS_TOKEN", None):
+            decision = ModelRouter(ModelCatalog()).route(self.classifier.classify("Python bug"))
         self.assertEqual(decision.model_id, "qwen3-8b")
+
+    def test_complex_coding_uses_github_model_when_token_is_configured(self):
+        with patch.object(config, "GITHUB_MODELS_TOKEN", "test-token"):
+            decision = ModelRouter(ModelCatalog()).route(self.classifier.classify("Explain this Python bug"))
+        self.assertEqual(decision.model_id, "gpt-4o")
+
+    def test_cloud_model_is_unavailable_without_token(self):
+        with patch.object(config, "GITHUB_MODELS_TOKEN", None):
+            catalog = ModelCatalog()
+        self.assertFalse(catalog.is_available(catalog.get("gpt-4o")))
     def test_fallback(self):
         catalog = ModelCatalog([ModelProfile("only", "ref", {"general"}, 1, 1, 100, False)])
         decision = ModelRouter(catalog).route(self.classifier.classify("pesquise arquivos"))
@@ -32,14 +47,28 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(review.text, "bold\ncode")
         self.assertTrue(review.changed)
         self.assertIn("markdown-formatting", review.violations)
-    def test_tool_round_limit(self):
+    async def test_tool_round_limit(self):
         calls = []
-        def client(*args, **kwargs):
+        async def client(*args, **kwargs):
             calls.append(1)
-            return "", [{"id": str(len(calls)), "name": "get_time", "arguments": "{}"}]
-        response = Orchestrator(chat_client=client, max_tool_rounds=2).handle_message("what time")
+            yield StreamEvent("tool_call", tool_call={"id": str(len(calls)), "name": "get_time", "arguments": "{}"})
+        with redirect_stdout(io.StringIO()):
+            response = await Orchestrator(chat_client=client, max_tool_rounds=2).handle_message("what time")
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(response.tool_calls), 2)
+
+    async def test_tool_markup_is_hidden_while_text_streams(self):
+        async def client(*args, **kwargs):
+            yield StreamEvent("content", content="before ")
+            yield StreamEvent("content", content='<tool_call>{"name":"get_time","arguments":{}}</tool_call>')
+            yield StreamEvent("content", content="after")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            response = await Orchestrator(chat_client=client, max_tool_rounds=1).handle_message("what time")
+        self.assertEqual(output.getvalue(), "before after")
+        self.assertTrue(response.text.startswith("before after"))
+        self.assertEqual(response.tool_calls[0]["name"], "get_time")
     def test_environment_configuration(self):
         with patch.dict(os.environ, {"ULTRON_REQUEST_TIMEOUT": "17"}):
             import config

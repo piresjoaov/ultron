@@ -9,6 +9,15 @@ class ModelRouter:
             and (task.category in model.capabilities or "general" in model.capabilities)
             and (not task.requires_tools or model.supports_tools)
             and model.context_window >= task.estimated_context_tokens]
+        cloud_preferred = (
+            task.complexity == "high"
+            or task.category in {"coding", "reasoning"}
+        )
+        if cloud_preferred:
+            cloud_candidates = [model for model in candidates if model.requires_token]
+            if cloud_candidates:
+                selected = max(cloud_candidates, key=lambda model: (model.quality_score, model.speed_score))
+                return RoutingDecision(selected.id, task.category, "Cloud model selected for complex coding or reasoning task", task.confidence, False)
         if candidates:
             def score(model):
                 return ((100 if task.category in model.capabilities else 0) + model.quality_score * 10 + model.speed_score * task.preferred_speed + 20 + (50 if task.requires_tools and model.supports_tools else 0))

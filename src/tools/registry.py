@@ -1,5 +1,5 @@
 from tools.time import get_time
-from tools.filesystem import find_files, read_file_text, list_directory
+from tools.filesystem import find_files, read_file_text, list_directory, search_codebase
 from tools.search import web_search
 
 TOOLS = {
@@ -7,6 +7,7 @@ TOOLS = {
     "find_files": find_files,
     "read_file_text": read_file_text,
     "list_directory": list_directory,
+    "search_codebase": search_codebase,
     "web_search": web_search
 }
 
@@ -27,7 +28,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "find_files",
-            "description": "Searches for files by name inside the user's home directory tree. Defaults to the Downloads folder if no directory is provided.",
+            "description": "Searches for files by name in the current workspace. Use this to locate files before reading them; defaults to the current working directory.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -37,7 +38,7 @@ TOOL_DEFINITIONS = [
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Absolute path of the directory to search in. Defaults to the user's Downloads folder if omitted."
+                        "description": "Workspace-relative or absolute directory path. Defaults to the current working directory."
                     },
                     "extension": {
                         "type": "string",
@@ -52,20 +53,49 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "read_file_text",
-            "description": "Reads the text content of a file (e.g. .txt, .md, .py) located inside the user's home directory tree, truncated to a maximum number of lines.",
+            "description": "Reads a text or source file in the current workspace. Use start_line and end_line to inspect only the relevant section of a large file.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_path": {
+                    "path": {
                         "type": "string",
-                        "description": "Absolute or user-relative path to the text file to read."
+                        "description": "Workspace-relative or absolute path to the text file."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based first line to return. Use this when reading a specific code region."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based last line to return, inclusive."
                     },
                     "max_lines": {
                         "type": "integer",
                         "description": "Maximum number of lines to read from the file. Defaults to 150."
                     }
                 },
-                "required": ["file_path"]
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_codebase",
+            "description": "Searches source files in the current workspace for a string or regular expression. Use this to find a function definition, class, symbol, import, or error across the project before reading matching files. Automatically skips .git, __pycache__, node_modules, .venv, target, and build directories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Literal text or regular expression to find, such as 'def handle_message' or 'TODO|FIXME'."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative directory to search. Defaults to '.'."
+                    }
+                },
+                "required": ["query"]
             }
         }
     },
@@ -94,13 +124,13 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "Lists the files and folders inside a given directory. Defaults to the Downloads folder if omitted.",
+            "description": "Lists files and folders inside the current workspace or a workspace-relative directory. Defaults to the current working directory.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "Path to the directory. Defaults to the user's Downloads folder if omitted."
+                        "description": "Workspace-relative or absolute directory path. Defaults to the current working directory."
                     }
                 },
                 "required": []

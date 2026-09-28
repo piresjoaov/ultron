@@ -3,7 +3,7 @@ from models.types import TaskProfile
 
 CODING_TERMS = {"python", "java", "javascript", "typescript", "programação", "programming", "código", "code", "bug", "erro", "function", "class", "api", "refactor", "debug", "repository", "github", "arquivo", "file"}
 REASONING_TERMS = {"compare", "analyze", "analyse", "why", "prove", "architecture", "tradeoff", "plan", "reason", "análise", "explique profundamente", "estratégia"}
-TOOL_TERMS = {"encontre", "buscar", "pesquise", "search", "find", "read", "leia", "listar", "list", "arquivos", "files", "horas", "time"}
+TOOL_TERMS = {"encontre", "buscar", "procure", "pesquise", "search", "find", "read", "leia", "listar", "list", "arquivos", "files", "horas", "time"}
 
 class TaskClassifier:
     def classify(self, prompt, context_messages=None):

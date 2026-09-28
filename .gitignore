@@ -220,6 +220,7 @@ __marimo__/
 # Ultron - local environment
 models/
 test.json
+.github/
 
 # Ultron - local configuration / secrets
 .env
