@@ -1,0 +1,13 @@
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-title"><img class="topbar-logo" src="assets/ultron-logo.png" alt="Ultron logo"><span class="topbar-wordmark">ULTRON</span><span>PERSONAL STEM TUTOR</span></div>
+    <div class="topbar-meta">SESSION 01 <span class="slash">/</span> LOCAL FIRST</div>
+  </header>
+  <div class="workspace">
+    <app-chat-feed [messages]="websocket.messages()" [selectedIndex]="keyboard.selectedIndex()" [streaming]="websocket.streaming()"></app-chat-feed>
+  </div>
+  <app-chat-input (submitted)="submitPrompt($event)"></app-chat-input>
+  <app-terminal-bar [mode]="keyboard.appMode()" [connected]="websocket.connected()"></app-terminal-bar>
+  @if (keyboard.commandPaletteOpen()) { <app-command-palette (executed)="handleCommand($event)"></app-command-palette> }
+  @if (notice) { <div class="toast">{{ notice }}</div> }
+</div>

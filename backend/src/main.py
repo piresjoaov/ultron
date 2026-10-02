@@ -2,11 +2,12 @@ import asyncio
 import time
 from server import LlamaServer
 from ui import Spinner
-from config import DEVELOPMENT_MODE
+from config import DEVELOPMENT_MODE, configure_console_encoding
 from client import ChatClientError
 from orchestration.orchestrator import Orchestrator
 
 async def main():
+    configure_console_encoding()
     server = LlamaServer()
     await asyncio.to_thread(server.start)
 
@@ -34,10 +35,16 @@ async def main():
             if user_input.lower() == "exit":
                 break
 
-            start_time = time.time()
+            start_time = time.monotonic()
+            first_output_time = None
+            last_output_time = None
             spinner.start()
 
             def on_first_token(token):
+                nonlocal first_output_time, last_output_time
+                now = time.monotonic()
+                first_output_time = first_output_time or now
+                last_output_time = now
                 spinner.stop()
 
             try:
@@ -56,8 +63,20 @@ async def main():
                     f"sanitized={response.metadata['output_sanitized']}; "
                     f"reason={response.routing_reason}")
 
-            elapsed = time.time() - start_time
-            print(f"\nResponse time: {elapsed:.2f} seconds\n")
+            elapsed = time.monotonic() - start_time
+            output_elapsed = ((last_output_time - first_output_time)
+                              if first_output_time is not None else 0)
+            if first_output_time is not None and output_elapsed <= 0:
+                output_elapsed = elapsed
+            completion_tokens = response.metadata.get("completion_tokens", 0)
+            if output_elapsed > 0 and completion_tokens:
+                speed = completion_tokens / output_elapsed
+                estimate_suffix = " (estimated)" if response.metadata.get("token_count_estimated") else ""
+                print(f"\nResponse time: {elapsed:.2f} seconds")
+                print(f"Generation speed: {speed:.2f} tokens/sec{estimate_suffix}\n")
+            else:
+                print(f"\nResponse time: {elapsed:.2f} seconds")
+                print("Generation speed: unavailable\n")
 
     finally:
         await asyncio.to_thread(server.stop)

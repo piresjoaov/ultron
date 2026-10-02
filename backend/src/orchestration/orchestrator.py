@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import re
 import sys
 import time
 
@@ -29,10 +30,12 @@ class Orchestrator:
         model = self.catalog.get(decision.model_id)
         self.messages.append({"role": "user", "content": user_input})
         calls_made, final_text = [], ""
+        completion_tokens = 0
+        token_count_estimated = False
         started = time.monotonic()
         for round_number in range(self.max_tool_rounds):
             try:
-                text, tool_calls = await self._consume_stream(model, on_token)
+                text, tool_calls, stream_usage = await self._consume_stream(model, on_token)
             except ChatClientError:
                 if not model.requires_token:
                     raise
@@ -45,7 +48,12 @@ class Orchestrator:
                     model.id, task.category,
                     "Cloud request failed; using local model fallback",
                     decision.confidence * 0.7, True)
-                text, tool_calls = await self._consume_stream(model, on_token)
+                text, tool_calls, stream_usage = await self._consume_stream(model, on_token)
+            if stream_usage is None:
+                completion_tokens += max(1, round(len(text.encode("utf-8")) / 4)) if text else 0
+                token_count_estimated = True
+            else:
+                completion_tokens += stream_usage
             final_text = text or final_text
             if not tool_calls:
                 if final_text:
@@ -62,11 +70,12 @@ class Orchestrator:
                 final_text = f"{final_text}\n\n{suffix}" if final_text else suffix
                 break
         review = self.output_policy.review(final_text)
-        return AssistantResponse(review.text, decision.model_id, task.category, decision.reason, tool_calls=calls_made, metadata={"model_ref": model.model_ref, "endpoint": model.endpoint, "routing_confidence": decision.confidence, "fallback_used": decision.fallback_used, "output_sanitized": review.changed, "output_policy_violations": list(review.violations), "latency_ms": int((time.monotonic() - started) * 1000)})
+        return AssistantResponse(review.text, decision.model_id, task.category, decision.reason, tool_calls=calls_made, metadata={"model_ref": model.model_ref, "endpoint": model.endpoint, "routing_confidence": decision.confidence, "fallback_used": decision.fallback_used, "output_sanitized": review.changed, "output_policy_violations": list(review.violations), "latency_ms": int((time.monotonic() - started) * 1000), "completion_tokens": completion_tokens, "token_count_estimated": token_count_estimated})
 
     async def _consume_stream(self, model, on_token):
         text_parts, calls, buffer = [], {}, ""
         in_tool_call = False
+        completion_tokens = None
         stream = self.chat_client(
             self.messages, tools=TOOL_DEFINITIONS, endpoint=model.endpoint,
             model=model.model_ref, api_url=model.api_url,
@@ -75,6 +84,11 @@ class Orchestrator:
             stream = await stream
         async for event in stream:
             kind = event.get("kind") if isinstance(event, dict) else event.kind
+            if kind == "usage":
+                usage = event.get("usage") if isinstance(event, dict) else event.usage
+                if usage and usage.get("completion_tokens") is not None:
+                    completion_tokens = usage["completion_tokens"]
+                continue
             if kind == "tool_call":
                 call = event.get("tool_call") if isinstance(event, dict) else event.tool_call
                 self._merge_tool_call(calls, call)
@@ -86,7 +100,7 @@ class Orchestrator:
                 buffer + content, in_tool_call, calls, text_parts, on_token)
         if buffer and not in_tool_call:
             self._emit_visible(buffer, text_parts, on_token)
-        return "".join(text_parts), list(calls.values())
+        return "".join(text_parts), list(calls.values()), completion_tokens
 
     def _consume_content(self, buffer, in_tool_call, calls, text_parts, on_token):
         opening, closing = "<tool_call>", "</tool_call>"
@@ -112,6 +126,11 @@ class Orchestrator:
 
     @staticmethod
     def _emit_visible(content, text_parts, on_token):
+        if not content:
+            return
+        # Keep streamed output subject to the same plain-text boundary as the final response.
+        content = re.sub(r"\*\*|__|`", "", content)
+        content = re.sub(r"</?tool_call>", "", content, flags=re.IGNORECASE)
         if not content:
             return
         text_parts.append(content)

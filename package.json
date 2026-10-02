@@ -1,0 +1,15 @@
+{
+  "name": "ultron",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names backend,desktop --prefix-colors blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\start-dev-backend.ps1",
+    "dev:frontend": "npm --prefix frontend run tauri:dev",
+    "dev:web": "npm --prefix frontend start",
+    "prod:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\build-production.ps1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

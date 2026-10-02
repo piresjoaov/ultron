@@ -150,7 +150,8 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+backend/.venv/
+.venv/
 env/
 venv/
 ENV/
@@ -174,6 +175,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Frontend and Tauri
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/src-tauri/target/
+frontend/src-tauri/Cargo.lock
 
 # pytype static type analyzer
 .pytype/
@@ -225,6 +234,9 @@ test.json
 # Ultron - local configuration / secrets
 .env
 .env.*
+*.token_cache
+msal_cache.bin
+msal_token_cache.bin
 
 # Ultron - local model/cache data
 *.gguf

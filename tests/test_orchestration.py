@@ -2,6 +2,7 @@ import importlib
 import io
 import os
 import unittest
+from io import BytesIO
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
@@ -47,6 +48,19 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review.text, "bold\ncode")
         self.assertTrue(review.changed)
         self.assertIn("markdown-formatting", review.violations)
+
+    def test_console_encoding_supports_unicode_email_subjects(self):
+        stream = io.TextIOWrapper(BytesIO(), encoding="cp1252")
+        with patch.object(config.sys, "stdout", stream), patch.object(
+            config.sys, "stderr", stream
+        ):
+            config.configure_console_encoding()
+            stream.write("Psst, your Prime Big Deal Days sneak peek is here! 👀")
+            stream.flush()
+        self.assertEqual(
+            stream.detach().getvalue().decode("utf-8"),
+            "Psst, your Prime Big Deal Days sneak peek is here! 👀",
+        )
     async def test_tool_round_limit(self):
         calls = []
         async def client(*args, **kwargs):
@@ -69,6 +83,17 @@ class OrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output.getvalue(), "before after")
         self.assertTrue(response.text.startswith("before after"))
         self.assertEqual(response.tool_calls[0]["name"], "get_time")
+
+    async def test_completion_usage_is_exposed_for_generation_stats(self):
+        async def client(*args, **kwargs):
+            yield StreamEvent("content", content="answer")
+            yield StreamEvent("usage", usage={"completion_tokens": 7})
+
+        with redirect_stdout(io.StringIO()):
+            response = await Orchestrator(chat_client=client).handle_message("hello")
+        self.assertEqual(response.metadata["completion_tokens"], 7)
+        self.assertFalse(response.metadata["token_count_estimated"])
+
     def test_environment_configuration(self):
         with patch.dict(os.environ, {"ULTRON_REQUEST_TIMEOUT": "17"}):
             import config

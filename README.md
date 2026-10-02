@@ -38,6 +38,7 @@ Final response
 
 **Stack:**
 - **Orchestration:** Python
+- **Desktop UI:** Tauri v2 + Angular 18 standalone + Tailwind CSS
 - **Local inference:** llama.cpp
 - **Model:** Qwen3 8B (GGUF format, Q4_K_M quantization)
 - **GPU:** Vulkan on AMD Radeon RX 7700S
@@ -130,21 +131,79 @@ This ensures predictability, auditability, and security.
 ### Installation
 
 1. Clone the repository
-2. Update paths in `src/config.py`:
+2. Update paths in `backend/src/config.py`:
    - `SERVER_PATH`: Path to your llama-server.exe
    - `MODEL_HF`: Your model identifier
+  - `ULTRON_MODEL_DRAFT_PATH`: Optional local draft `.gguf`; if missing, the server starts without speculative decoding
    - `DEVICE`: Your GPU device (Vulkan1, CUDA, Metal, etc)
 
-3. Install dependencies:
+3. Install backend dependencies:
 ```bash
-pip install requests
+pip install -r backend/requirements.txt
 ```
 
-4. Run:
+4. Run the terminal client:
 ```bash
-cd src
+cd backend/src
 python main.py
 ```
+
+5. Install the root development runner and start both services with one command:
+```bash
+npm install
+npm run dev
+```
+
+This starts the FastAPI WebSocket backend and the Tauri/Angular desktop app together. The equivalent individual frontend command is:
+```bash
+cd frontend
+npm install
+npm run tauri:dev
+```
+
+The Angular client connects to the FastAPI WebSocket adapter at `ws://localhost:8000/ws/chat`.
+
+### Microsoft Outlook integration
+
+Ultron can authenticate to the configured UW-Madison Microsoft Entra tenant and
+read, search, list, and move Outlook messages. It uses MSAL public-client
+interactive browser authentication and caches tokens under the user's local
+application-data directory. No client secret is required.
+
+Set these environment variables in the local `.env` file (never commit that
+file):
+
+```text
+MICROSOFT_CLIENT_ID=
+MICROSOFT_TENANT_ID=
+```
+
+Install the backend dependencies with:
+
+```powershell
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+To perform the first interactive login and verify `/me` and `/me/messages`
+without printing an access token:
+
+```powershell
+$env:PYTHONPATH = "backend\src"
+backend\.venv\Scripts\python.exe -m integrations.microsoft.verify
+```
+
+The registered Outlook tools are `authenticate_microsoft`, `list_emails`,
+`read_email`, `search_emails`, and `move_email`. Ultron does not register
+message sending or deletion operations.
+
+To create a local production app and a desktop shortcut on Windows:
+```powershell
+npm run prod:build
+```
+
+This places `Ultron.lnk` and the production files in `Área de Trabalho\Ultron`. It also creates MSI and NSIS installers under `frontend/src-tauri/target/release/bundle/` for future distribution. Use `npm run dev` for development, then rerun `npm run prod:build` whenever you want to publish the latest confirmed implementation locally.
+
+For a manual low-latency server launch on Windows, run `backend/scripts/start-llama-server.ps1`. It enables Flash Attention, q8_0 KV cache quantization, 99 GPU layers, and uses `ULTRON_MODEL_DRAFT_PATH` when the draft file exists.
 
 ### Usage
 

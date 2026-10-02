@@ -20,6 +20,7 @@ class StreamEvent:
     kind: str
     content: str = ""
     tool_call: dict | None = None
+    usage: dict | None = None
 
 
 async def stream_chat_completion(messages, tools=None, *, endpoint=None, api_url=None,
@@ -29,6 +30,7 @@ async def stream_chat_completion(messages, tools=None, *, endpoint=None, api_url
     """Yield visible content and structured tool-call deltas as SSE data arrives."""
     payload = {"model": model or "qwen", "messages": messages, "temperature": 0.7,
                "stream": True, "max_tokens": max_tokens,
+               "stream_options": {"include_usage": True},
                "chat_template_kwargs": {"enable_thinking": enable_thinking}}
     if tools:
         payload["tools"] = tools
@@ -57,6 +59,9 @@ async def stream_chat_completion(messages, tools=None, *, endpoint=None, api_url
                     except (json.JSONDecodeError, AttributeError, IndexError, TypeError) as exc:
                         raise ChatClientError(f"Malformed streaming response: {decoded[:160]!r}") from exc
                     received_chunk = True
+                    usage = chunk.get("usage")
+                    if usage:
+                        yield StreamEvent("usage", usage=usage)
                     content = delta.get("content")
                     if content:
                         visible_content = True

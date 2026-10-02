@@ -1,4 +1,5 @@
 import os
+import logging
 import subprocess
 import urllib.request
 import time
@@ -6,24 +7,28 @@ from config import (
     SERVER_PATH, MODEL_HF, MODEL_PATH, DEVICE, LOG_FILE, HEALTH_URL, STARTUP_TIMEOUT,
     SERVER_CTX_SIZE, SERVER_GPU_LAYERS, SERVER_THREADS, SERVER_THREADS_BATCH,
     SERVER_BATCH_SIZE, SERVER_UBATCH_SIZE, SERVER_PARALLEL, SERVER_CACHE_PROMPT,
+    SERVER_CACHE_TYPE_K, SERVER_CACHE_TYPE_V,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 class LlamaServer:
     def __init__(self, startup_timeout=STARTUP_TIMEOUT):
         self.process = None
         self.startup_timeout = startup_timeout
 
-    def start(self):
-        log_dir = os.path.dirname(LOG_FILE)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
+    @staticmethod
+    def build_server_command():
+        """Build the llama-server command without speculative decoding."""
         model_args = ["-m", MODEL_PATH] if MODEL_PATH else ["-hf", MODEL_HF]
-        self.process = subprocess.Popen([
+        command = [
             SERVER_PATH,
             *model_args,
             "--n-gpu-layers", str(SERVER_GPU_LAYERS),
             "--device", DEVICE,
             "--flash-attn", "on",
+            "--cache-type-k", SERVER_CACHE_TYPE_K,
+            "--cache-type-v", SERVER_CACHE_TYPE_V,
             "--ctx-size", str(SERVER_CTX_SIZE),
             "--threads", str(SERVER_THREADS),
             "--threads-batch", str(SERVER_THREADS_BATCH),
@@ -31,8 +36,18 @@ class LlamaServer:
             "--ubatch-size", str(SERVER_UBATCH_SIZE),
             "--parallel", str(SERVER_PARALLEL),
             "--fit", "on",
-            "--log-file", LOG_FILE
-        ] + (["--cache-prompt"] if SERVER_CACHE_PROMPT else []),
+            "--log-file", LOG_FILE,
+        ]
+        if SERVER_CACHE_PROMPT:
+            command.append("--cache-prompt")
+        return command
+
+    def start(self):
+        log_dir = os.path.dirname(LOG_FILE)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        self.process = subprocess.Popen(
+            self.build_server_command(),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         deadline = time.monotonic() + self.startup_timeout
